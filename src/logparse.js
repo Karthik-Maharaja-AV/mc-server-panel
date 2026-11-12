@@ -52,14 +52,25 @@ function nowTime() {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-// Events the panel reacts to.
+// Player names: Java names, plus the "." or "*" prefix Geyser/Floodgate gives Bedrock players.
+const NAME = '[.*]?[A-Za-z0-9_]{1,16}';
+
+// Events the panel reacts to. These lines are the same on Vanilla, Paper,
+// Spigot and Fabric; several patterns per event so a custom join message
+// (from a plugin) doesn't hide players.
 const EVENTS = [
   { type: 'done', re: /^Done \([\d.,]+s\)!/ },
-  { type: 'join', re: /^([A-Za-z0-9_]{1,16}) joined the game/ },
-  { type: 'leave', re: /^([A-Za-z0-9_]{1,16}) left the game/ },
+  { type: 'join', re: new RegExp(`^(${NAME}) joined the game`) },
+  { type: 'join', re: new RegExp(`^(${NAME})\\[[^\\]]*\\] logged in with entity id`) },
+  { type: 'leave', re: new RegExp(`^(${NAME}) left the game`) },
+  { type: 'leave', re: new RegExp(`^(${NAME}) lost connection:`) },
   { type: 'saved', re: /^Saved the game/ },
   { type: 'seed', re: /^Seed: \[(-?\d+)\]/ },
-  { type: 'listPlayers', re: /^There are \d+ of a max of \d+ players online:\s*(.*)$/ },
+  {
+    type: 'listPlayers',
+    re: /^There are (\d+) (?:of a max of|out of maximum) (\d+) players online\.?:?\s*(.*)$/,
+    value: (m) => ({ count: parseInt(m[1], 10), names: m[3].split(',').map((s) => s.trim()).filter((s) => new RegExp(`^${NAME}$`).test(s)) })
+  },
   { type: 'portInUse', re: /FAILED TO BIND TO PORT/i },
   { type: 'eula', re: /You need to agree to the EULA/i },
   { type: 'lag', re: /^Can't keep up!/ }
@@ -68,7 +79,7 @@ const EVENTS = [
 function detectEvent(msg) {
   for (const e of EVENTS) {
     const m = e.re.exec(msg);
-    if (m) return { type: e.type, value: m[1] };
+    if (m) return { type: e.type, value: e.value ? e.value(m) : m[1] };
   }
   return null;
 }

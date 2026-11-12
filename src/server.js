@@ -17,6 +17,7 @@ const { MinecraftServer } = require('./mc');
 const { Jobs } = require('./jobs');
 const { Backups } = require('./backups');
 const { Worlds, FLAT_PRESETS, BIOMES } = require('./worlds');
+const existing = require('./existing');
 const { lanAddresses, PLAYER_NAME } = require('./util');
 
 const mc = new MinecraftServer();
@@ -153,7 +154,7 @@ app.post('/api/console', requireUser('commands'), h(async (req, res) => {
 
 // ---------- players ----------
 app.get('/api/players', requireUser(), (req, res) => {
-  res.json({ players: players.list(mc.online), running: mc.state === 'running' });
+  res.json({ players: players.list(mc.online), count: mc.playerCount(), running: mc.state === 'running' });
 });
 
 app.post('/api/players', requireUser('players'), h(async (req, res) => {
@@ -285,6 +286,9 @@ app.get('/api/setup/info', requireUser('settings'), h(async (req, res) => {
     version: cfg.serverVersion,
     eula: installer.eulaAccepted(),
     java: await installer.javaVersion(cfg.javaPath),
+    jar: cfg.jar,
+    linked: path.resolve(config.serverDir()) !== path.resolve(config.resolvePath(config.DEFAULTS.serverDir)),
+    defaultServerDir: config.resolvePath(config.DEFAULTS.serverDir),
     config: {
       javaPath: cfg.javaPath,
       minMemoryMB: cfg.minMemoryMB,
@@ -298,6 +302,74 @@ app.get('/api/setup/info', requireUser('settings'), h(async (req, res) => {
     },
     totalMemoryMB: Math.round(require('os').totalmem() / 1024 / 1024)
   });
+}));
+
+// ---------- setup: use a server that already exists on this PC ----------
+// These can see folders on the host PC, so only the owner may use them.
+function requireOwner(req, res, next) {
+  requireUser()(req, res, () => {
+    if (!req.user.owner) return res.status(403).json({ error: 'Only the owner can choose server folders.' });
+    next();
+  });
+}
+
+function assertCanSwitch() {
+  if (mc.child) throw Object.assign(new Error('Stop the server first.'), { status: 409 });
+  if (jobs.busy()) throw Object.assign(new Error(`Wait for "${jobs.current.label}" to finish.`), { status: 409 });
+}
+
+app.get('/api/setup/browse', requireOwner, h(async (req, res) => {
+  res.json(await existing.browse(typeof req.query.path === 'string' ? req.query.path : ''));
+}));
+
+app.get('/api/setup/inspect', requireOwner, h(async (req, res) => {
+  res.json(await existing.inspect(req.query.path));
+}));
+
+app.post('/api/setup/link', requireOwner, h(async (req, res) => {
+  assertCanSwitch();
+  const { path: dir, jar, useScript = true } = req.body || {};
+  const scan = await existing.inspect(dir);
+  const chosen = scan.jars.find((j) => j.name === jar);
+  if (!chosen) throw new Error('Choose the server jar to start.');
+  const patch = { serverDir: scan.path, jar: chosen.name, serverType: chosen.type || 'custom', serverVersion: chosen.version || null };
+  const applied = [];
+  if (useScript && scan.script) {
+    const s = scan.script;
+    if (s.maxMemoryMB) {
+      patch.maxMemoryMB = Math.max(512, s.maxMemoryMB);
+      patch.minMemoryMB = Math.min(patch.maxMemoryMB, Math.max(256, s.minMemoryMB || Math.min(1024, patch.maxMemoryMB)));
+      applied.push(`memory ${patch.maxMemoryMB} MB`);
+    }
+    if (s.jvmArgs) {
+      patch.jvmArgs = s.jvmArgs;
+      applied.push('Java flags');
+    }
+    if (s.javaPath && fs.existsSync(s.javaPath)) {
+      patch.javaPath = s.javaPath;
+      applied.push('Java path');
+    }
+  }
+  config.update(patch);
+  mc.reloadHistory();
+  log(`${req.user.username} linked the existing server in ${scan.path} (${chosen.name})${applied.length ? `, using ${applied.join(', ')} from ${scan.script.name}` : ''}.`);
+  res.json({ ok: true, applied });
+}));
+
+app.post('/api/setup/unlink', requireOwner, h(async (req, res) => {
+  assertCanSwitch();
+  const dir = config.resolvePath(config.DEFAULTS.serverDir);
+  let type = null;
+  let version = null;
+  if (fs.existsSync(path.join(dir, 'server.jar'))) {
+    const d = await existing.describeJar(dir, 'server.jar').catch(() => ({}));
+    type = d.type || null;
+    version = d.version || null;
+  }
+  config.update({ serverDir: config.DEFAULTS.serverDir, jar: 'server.jar', serverType: type, serverVersion: version });
+  mc.reloadHistory();
+  log(`${req.user.username} switched back to the panel's own server folder.`);
+  res.json({ ok: true });
 }));
 
 app.get('/api/setup/versions', requireUser('settings'), h(async (req, res) => {

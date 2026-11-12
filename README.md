@@ -28,13 +28,25 @@ Not affiliated with Mojang or Microsoft.
    - **macOS:** double-click `start.command` (the first time, right-click → Open)
    - **Linux / terminal:** `./start.sh` or `npm install && npm start`
 3. Open **<http://localhost:8080>** and create the **owner account**.
-4. On the **Setup** page:
-   1. choose **Paper** (recommended, supports plugins) or **Vanilla** and a version, then press **Install**;
-   2. read and accept the **Minecraft EULA**;
-   3. set the memory (4096 MB is a good start).
-5. Press **Start** at the top. The first start takes a minute while the world is generated.
+4. On the **Setup** page, under **1. Server**, pick one:
+   - **I already have a server:** browse to (or paste) the folder of the server you already run and press **Use this server**. See [Using a server you already have](#using-a-server-you-already-have).
+   - **Download a new server:** choose **Paper** (supports plugins) or **Vanilla** and a version, then press **Install**.
+5. Read and accept the **Minecraft EULA** (skipped if your server already accepted it).
+6. Check the memory (4096 MB is a good start), then press **Start** at the top. The first start of a new world takes a minute.
 
 The window that started the panel must stay open. Closing it (or pressing Ctrl+C) stops Minecraft cleanly and saves the world first.
+
+## Using a server you already have
+
+Works with **Vanilla, Paper, Spigot, Purpur and Fabric** servers. Nothing is copied or moved: the panel runs the server in its own folder.
+
+1. **Stop** the server if it is running (type `stop` in its window).
+2. On **Setup → 1. Server → I already have a server**, press **Browse…** and open the server's folder, or paste its path, e.g. `C:\Users\you\Desktop\MyServer`. Folders that contain a server are marked *Minecraft server*.
+3. Press **Use this folder**. The panel lists what it found: the server jar, worlds, `server.properties`, whether the EULA is accepted, and the memory and Java settings from its start file (`start.bat`, `run.bat`, `start.sh`…).
+4. If there is more than one jar, pick the one that starts the server, then press **Use this server**.
+5. From now on, start the server from the panel, not with its own `.bat` file. Its worlds, players, plugins and settings keep working as before.
+
+**Stop using this folder** switches back to the panel's own `server/` folder and leaves your files untouched. Only the owner account can choose folders. Forge and NeoForge servers start through their own run script, which the panel can't launch yet.
 
 ## Opening the panel from other PCs
 
@@ -67,7 +79,7 @@ mc-server-panel/
 └─ data/       Panel settings (config.json), accounts (users.json), world info
 ```
 
-All three are in `.gitignore`. To move an existing server in, stop the panel's server, copy your files into `server/`, rename the jar to `server.jar`, then accept the EULA on the Setup page if it isn't already accepted.
+All three are in `.gitignore`. If you link a server you already have, its files stay in their own folder instead of `server/`.
 
 ## Settings file
 
@@ -77,7 +89,7 @@ All three are in `.gitignore`. To move an existing server in, stop the panel's s
 |---|---|---|
 | `panelPort` | `8080` | Panel port (or start with `PANEL_PORT=8081`) |
 | `lanAccess` | `true` | `false` = only this PC can open the panel |
-| `serverDir` | `server` | Where the Minecraft server lives |
+| `serverDir` | `server` | Where the Minecraft server lives (set from Setup → I already have a server) |
 | `backupDir` | `backups` | Where backups go (e.g. another drive) |
 | `stopTimeoutSec` | `60` | How long to wait for a clean stop before force-closing |
 
@@ -86,6 +98,8 @@ Set `PANEL_DATA_DIR` to keep `data/` somewhere else.
 ## How it works
 
 The panel starts Java as a child process (`java -Xms… -Xmx… -jar server.jar nogui`). It reads everything the server prints and streams it to browsers over a WebSocket. Commands you type are written to the server's standard input, the same as typing in its terminal. RCON isn't needed.
+
+**Who is online** comes from the server itself: every 10 seconds the panel sends the same status request the Minecraft multiplayer screen uses (the "Server List Ping"), which reports the player count and names on every server type. Join, leave and `list` lines in the console update the count straight away in between, including Bedrock players joining through Geyser. Players who turn off *Allow Server Listings* are counted but their names aren't shared; type `list` in the console to see them.
 
 Player changes run as normal server commands (`op`, `whitelist add`, `ban`…), so the server stays in charge of its own files. Backups pause autosave (`save-off`), flush the world (`save-all flush`), zip the world plus its Nether and End folders, then turn autosave back on. Restores first take a safety backup, stop the server, swap in the files, then start it again.
 

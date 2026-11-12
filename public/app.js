@@ -20,7 +20,8 @@ const ICON = {
   restart: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
   dice: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor"/>',
-  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
 };
 const icon = (name, size = 18) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
@@ -337,7 +338,8 @@ function onSocket(msg) {
       break;
     }
     case 'players':
-      S.status.online = msg.data;
+      S.status.online = msg.data.names;
+      S.status.onlineCount = msg.data.count;
       renderStats();
       renderNav();
       if (S.tab === 'players') refreshTab();
@@ -398,7 +400,7 @@ function renderHeader() {
     const s = o.server;
     const addr = o.panel.addresses[0] || 'localhost';
     $('#sub').innerHTML = [
-      s.installed ? `<span>${esc(s.type === 'paper' ? 'Paper' : s.type === 'vanilla' ? 'Vanilla' : 'Custom jar')} ${esc(s.version || '')}</span>` : '<span>No server installed</span>',
+      s.installed ? `<span>${esc(typeLabel(s.type))} ${esc(s.version || '')}</span>` : '<span>No server set up</span>',
       `<span>World: ${esc(s.levelName)}</span>`,
       `<span class="mono">${esc(addr)}:${esc(s.port)}</span>`
     ].join('');
@@ -409,8 +411,10 @@ function renderHeader() {
     return;
   }
   const busy = !!S.job;
+  const ready = !o || (o.server.installed && o.server.eula);
+  const why = o && !o.server.installed ? 'Set up a server on the Setup page first' : o && !o.server.eula ? 'Accept the EULA on the Setup page first' : '';
   p.innerHTML = `
-    <button class="btn btn-primary" data-act="power" data-a="start" ${st !== 'stopped' || busy ? 'disabled' : ''}>${icon('play', 16)}Start</button>
+    <button class="btn btn-primary" data-act="power" data-a="start" ${st !== 'stopped' || busy || !ready ? 'disabled' : ''} ${why ? `title="${esc(why)}"` : ''}>${icon('play', 16)}Start</button>
     <button class="btn" data-act="power" data-a="restart" ${st !== 'running' || busy ? 'disabled' : ''}>${icon('restart', 16)}Restart</button>
     ${st === 'stopping' ? `<button class="btn btn-danger" data-act="power" data-a="kill">Force stop</button>` : `<button class="btn btn-danger" data-act="power" data-a="stop" ${st === 'stopped' || busy ? 'disabled' : ''}>${icon('stop', 14)}Stop</button>`}`;
 }
@@ -418,7 +422,7 @@ function renderHeader() {
 function renderNav() {
   const nav = $('#nav');
   if (!nav) return;
-  const count = { players: String(S.status.online ? S.status.online.length : 0) };
+  const count = { players: String(onlineCount()) };
   nav.innerHTML =
     visibleTabs()
       .map(
@@ -433,12 +437,19 @@ function renderNav() {
     </div>`;
 }
 
+// The server's own count (Server List Ping) when known, else names seen in the console.
+function onlineCount() {
+  const s = S.status;
+  if (s.state === 'stopped') return 0;
+  return typeof s.onlineCount === 'number' ? s.onlineCount : (s.online || []).length;
+}
+
 function renderStats() {
   const el = $('#stats');
   if (!el || !S.overview) return;
   const st = S.stats || {};
   const running = S.status.state !== 'stopped';
-  const online = (S.status.online || []).length;
+  const online = onlineCount();
   const max = S.overview.server.maxPlayers || 20;
   const memPct = st.maxMemory ? Math.min(100, (st.memory / st.maxMemory) * 100) : 0;
   const cards = [
@@ -637,6 +648,7 @@ function renderPlayers() {
       </div>
       ${!running ? '<div style="padding:12px 16px 0"><div class="notice notice-info">The server is offline. Start it to change operators, the whitelist or bans.</div></div>' : ''}
       ${!allowed ? '<div style="padding:12px 16px 0"><div class="notice notice-info">You can see players but not change them.</div></div>' : ''}
+      ${running && d.count > d.players.filter((p) => p.online).length ? `<div style="padding:12px 16px 0"><div class="notice notice-info">${d.count} player${d.count > 1 ? 's are' : ' is'} online, but the server only shared ${d.players.filter((p) => p.online).length ? 'some of their names' : 'the number, not the names'}. Type <code>list</code> in the Console to see everyone.</div></div>` : ''}
       ${
         d.players.length
           ? `<div class="table-wrap" style="margin-top:8px"><table>
@@ -1025,15 +1037,27 @@ function renderSetup() {
   const versions = (S.data.versions && S.data.versions[type]) || null;
   const vinfo = S.data.vinfo;
   const javaOk = vinfo && vinfo.javaMin && d.java ? d.java.major >= vinfo.javaMin : null;
+  if (!S.form.setupMode) S.form.setupMode = d.linked || !d.installed ? 'existing' : 'download';
+  const mode = S.form.setupMode;
 
   $('#page').innerHTML = `
     <section class="stack" aria-labelledby="h-setup" style="gap:16px">
-      <div class="page-head"><div><h2 id="h-setup">Setup</h2><p>Install the server, accept the EULA, and choose Java and memory.</p></div></div>
-      ${!d.installed || !d.eula ? `<div class="notice notice-info">To get started: <strong>1.</strong> install a server version, <strong>2.</strong> accept the EULA, <strong>3.</strong> press Start at the top.</div>` : ''}
+      <div class="page-head"><div><h2 id="h-setup">Setup</h2><p>Choose your server, accept the EULA, and set Java and memory.</p></div></div>
+      ${!d.installed || !d.eula ? `<div class="notice notice-info">To get started: <strong>1.</strong> link the server you already have, or download a new one, <strong>2.</strong> accept the EULA, <strong>3.</strong> press Start at the top.</div>` : ''}
 
       <div class="card card-pad stack">
-        <div class="row" style="justify-content:space-between"><h3>1. Server software</h3>${d.installed ? `<span class="tag tag-green">Installed: ${esc(d.type === 'paper' ? 'Paper' : d.type === 'vanilla' ? 'Vanilla' : 'custom jar')} ${esc(d.version || '')}</span>` : '<span class="tag tag-amber">Not installed</span>'}</div>
-        <p class="muted small" style="margin:0"><strong>Paper</strong> is faster and supports plugins (recommended). <strong>Vanilla</strong> is the official server from Mojang. Downloads come straight from PaperMC or Mojang and are checked against their checksums.</p>
+        <div class="row" style="justify-content:space-between"><h3>1. Server</h3>${d.installed ? `<span class="tag tag-green">${esc(typeLabel(d.type))} ${esc(d.version || '')} · ${esc(d.jar)}</span>` : '<span class="tag tag-amber">No server yet</span>'}</div>
+        <div role="group" aria-label="Where the server comes from" class="row" style="gap:6px">
+          <button class="pill" data-act="setupmode" data-id="existing" ${pressed(mode === 'existing')}>I already have a server</button>
+          <button class="pill" data-act="setupmode" data-id="download" ${pressed(mode === 'download')}>Download a new server</button>
+        </div>
+        ${mode === 'existing' ? existingSection(d, running) : ''}
+      </div>
+
+      <div class="card card-pad stack ${mode === 'download' ? '' : 'hidden'}">
+        <h3>Download a new server</h3>
+        ${d.linked ? `<div class="notice notice-warn">You are using the server in <code>${esc(d.config.serverDir)}</code>. A download goes into that folder as <code>server.jar</code> and replaces which jar the panel starts.</div>` : ''}
+        <p class="muted small" style="margin:0"><strong>Paper</strong> is faster and supports plugins. <strong>Vanilla</strong> is the official server from Mojang. Downloads come straight from PaperMC or Mojang and are checked against their checksums.</p>
         <div class="row">
           <div role="group" aria-label="Server type" class="row" style="gap:6px">
             <button class="pill" data-act="stype" data-id="paper" ${pressed(type === 'paper')}>Paper</button>
@@ -1076,10 +1100,9 @@ function renderSetup() {
       <div class="card card-pad stack">
         <h3>Folders</h3>
         <div class="grid-auto">
-          <div class="field"><span>Server files</span><code class="small" style="word-break:break-all">${esc(c.serverDir)}</code></div>
+          <div class="field"><span>Server files${d.linked ? ' (your existing server)' : ''}</span><code class="small" style="word-break:break-all">${esc(c.serverDir)}</code></div>
           <div class="field"><span>Backups</span><code class="small" style="word-break:break-all">${esc(c.backupDir)}</code></div>
         </div>
-        <p class="muted small" style="margin:0">To use an existing server, copy its files (worlds, server.properties, and its jar renamed to <code>server.jar</code>) into the server folder while the server is stopped.</p>
       </div>
 
       <form class="card card-pad stack" id="pw-form">
@@ -1092,7 +1115,13 @@ function renderSetup() {
       </form>
     </section>`;
 
-  if (!versions) loadVersions(type);
+  if (mode === 'download' && !versions) loadVersions(type);
+  const pathForm = $('#path-form');
+  if (pathForm)
+    pathForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      scanFolder(S.form.existingPath);
+    });
   $('#version-select').addEventListener('change', async (e) => {
     S.form.version = e.target.value;
     S.data.vinfo = null;
@@ -1122,6 +1151,113 @@ function renderSetup() {
       setTimeout(boot, 1200);
     });
   });
+}
+
+const TYPE_LABELS = { paper: 'Paper', vanilla: 'Vanilla', purpur: 'Purpur', spigot: 'Spigot', folia: 'Folia', fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge', hybrid: 'Hybrid', custom: 'Custom' };
+const typeLabel = (t) => TYPE_LABELS[t] || (t ? t : 'Unknown type');
+
+// "Use the server I already have": pick a folder, scan it, link it.
+function existingSection(d, running) {
+  if (!S.user.owner) return '<div class="notice notice-info">Only the owner can choose which server folder the panel uses.</div>';
+  const scan = S.data.scan;
+  const b = S.browse;
+  const linkedNote = d.linked && d.installed
+    ?`<div class="notice notice-ok">Using your server in <code>${esc(d.config.serverDir)}</code> · starts <code>${esc(d.jar)}</code>.
+         <div class="row" style="margin-top:8px"><button class="btn btn-sm" data-act="unlink" ${running ? 'disabled' : ''}>Stop using this folder</button></div></div>`
+    : '';
+  let scanHtml = '';
+  if (scan) {
+    const ok = (yes, text) => `<li style="display:flex;gap:8px;align-items:baseline"><span aria-hidden="true" style="color:${yes ? 'var(--green)' : 'var(--amber)'};font-weight:700">${yes ? '✓' : '!'}</span><span>${text}</span></li>`;
+    const jar = S.form.linkJar || scan.suggestedJar;
+    scanHtml = `
+      <div class="stack" style="gap:10px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)">
+        <strong style="word-break:break-all">Found in ${esc(scan.path)}</strong>
+        <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px" class="small">
+          ${ok(scan.jars.length > 0, scan.jars.length ? `${scan.jars.length} server jar${scan.jars.length > 1 ? 's' : ''}` : 'No server jar')}
+          ${ok(scan.worlds.length > 0, scan.worlds.length ? `World${scan.worlds.length > 1 ? 's' : ''}: ${scan.worlds.map(esc).join(', ')} (loads "${esc(scan.levelName)}")` : 'No world yet, one is created on first start')}
+          ${ok(scan.hasProperties, scan.hasProperties ? `server.properties (port ${esc(scan.port)})` : 'No server.properties yet, created on first start')}
+          ${ok(scan.eula, scan.eula ? 'EULA already accepted' : 'EULA not accepted yet, see step 2 below')}
+          ${scan.script ? ok(true, `Start script <code>${esc(scan.script.name)}</code>${scan.script.maxMemoryMB ? `: ${scan.script.maxMemoryMB} MB memory` : ''}`) : ''}
+        </ul>
+        ${scan.problems.map((p) => `<div class="notice notice-err">${esc(p)}</div>`).join('')}
+        ${
+          scan.jars.length
+            ? `<fieldset class="stack" style="gap:6px;border:none;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Which jar starts the server?</legend>
+              ${scan.jars
+                .map(
+                  (j) => `<label class="check"><input type="radio" name="linkjar" data-model="linkJar" value="${esc(j.name)}" ${j.name === jar ? 'checked' : ''}><span><code>${esc(j.name)}</code> <span class="muted small">· ${esc(j.type ? typeLabel(j.type) : 'unknown type')}${j.version ? ' ' + esc(j.version) : ''} · ${fmtBytes(j.size)}${j.name === scan.suggestedJar ? ' · suggested' : ''}</span></span></label>`
+                )
+                .join('')}</fieldset>`
+            : ''
+        }
+        ${scan.script && (scan.script.maxMemoryMB || scan.script.jvmArgs || scan.script.javaPath) ? `<label class="check"><input type="checkbox" data-model="useScript" ${S.form.useScript !== false ? 'checked' : ''}><span>Use the settings from <code>${esc(scan.script.name)}</code> (${[scan.script.maxMemoryMB ? scan.script.maxMemoryMB + ' MB memory' : '', scan.script.jvmArgs ? 'Java flags' : '', scan.script.javaPath ? 'its Java' : ''].filter(Boolean).join(', ')})</span></label>` : ''}
+        <p class="muted small" style="margin:0">From now on, start the server from this panel, not with its own start file. Your worlds, players, plugins and settings stay where they are.</p>
+        <div class="row"><button class="btn btn-primary" data-act="link" ${!scan.jars.length || running || S.job ? 'disabled' : ''}>Use this server</button>${running ? '<span class="muted small">Stop the server first.</span>' : ''}</div>
+      </div>`;
+  }
+  let browser = '';
+  if (b) {
+    browser = `
+      <div class="stack" style="gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-deep)">
+        <div class="row" style="justify-content:space-between">
+          <code class="small" style="word-break:break-all;flex:1 1 200px">${esc(b.path || 'This PC')}</code>
+          <span class="row" style="gap:6px">
+            <button class="btn btn-sm" data-act="browsego" data-path="${esc(b.parent || '')}" ${b.parent === null ? 'disabled' : ''}>Up</button>
+            <button class="btn btn-sm" data-act="browsego" data-path="${esc(b.home)}">Home</button>
+            ${b.windows ? '<button class="btn btn-sm" data-act="browsego" data-path="drives">Drives</button>' : ''}
+            <button class="btn btn-sm" data-act="browseclose">Close</button>
+          </span>
+        </div>
+        <div role="list" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+          ${
+            b.dirs.length
+              ? b.dirs
+                  .map(
+                    (x) => `<button role="listitem" class="tab" style="min-height:38px" data-act="browsego" data-path="${esc(x.path)}">${icon('folder', 16)}<span class="label-text" style="word-break:break-all">${esc(x.name)}</span>${x.server ? '<span class="tag tag-green">Minecraft server</span>' : ''}</button>`
+                  )
+                  .join('')
+              : '<div class="muted small" style="padding:8px">No folders here.</div>'
+          }
+        </div>
+        ${b.path ? `<div class="row" style="justify-content:space-between"><span class="muted small">${b.here ? 'This folder looks like a Minecraft server.' : 'Open the folder that contains your server files, then:'}</span><button class="btn btn-primary btn-sm" data-act="usefolder">Use this folder</button></div>` : ''}
+      </div>`;
+  }
+  return `
+    ${linkedNote}
+    <p class="muted small" style="margin:0">Pick the folder of a server you already run (Vanilla, Paper, Spigot, Purpur or Fabric). Nothing is copied or moved.</p>
+    <form class="row" id="path-form">
+      <input class="fld mono" data-model="existingPath" value="${esc(S.form.existingPath || '')}" placeholder="Server folder, e.g. C:\\Users\\you\\Desktop\\MyServer" aria-label="Server folder path" style="flex:1 1 280px">
+      <button type="button" class="btn" data-act="browse">Browse…</button>
+      <button type="submit" class="btn btn-primary">Check folder</button>
+    </form>
+    ${browser}
+    ${scanHtml}`;
+}
+
+async function browseTo(p) {
+  try {
+    S.browse = await api('GET', '/api/setup/browse?path=' + encodeURIComponent(p || ''));
+    renderSetup();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function scanFolder(p) {
+  p = (p || '').trim();
+  if (!p) return toast('Type or browse to your server folder first.', 'err');
+  try {
+    S.data.scan = await api('GET', '/api/setup/inspect?path=' + encodeURIComponent(p));
+    S.form.existingPath = S.data.scan.path;
+    S.form.linkJar = S.data.scan.suggestedJar;
+    S.form.useScript = true;
+    S.browse = null;
+    renderSetup();
+  } catch (e) {
+    S.data.scan = null;
+    renderSetup();
+    toast(e.message, 'err');
+  }
 }
 
 async function loadVersions(type) {
@@ -1294,6 +1430,34 @@ const ACTIONS = {
       await api('DELETE', '/api/worlds/' + encodeURIComponent(name));
       await refreshTab();
     }, `Deleted "${name}".`);
+  },
+  setupmode: (el) => {
+    S.form.setupMode = el.dataset.id;
+    renderSetup();
+  },
+  browse: () => browseTo((S.form.existingPath || '').trim()),
+  browsego: (el) => browseTo(el.dataset.path),
+  browseclose: () => {
+    S.browse = null;
+    renderSetup();
+  },
+  usefolder: () => scanFolder(S.browse.path),
+  link: () =>
+    act(async () => {
+      const scan = S.data.scan;
+      const r = await api('POST', '/api/setup/link', { path: scan.path, jar: S.form.linkJar || scan.suggestedJar, useScript: S.form.useScript !== false });
+      S.data.scan = null;
+      await Promise.all([loadOverview(), loadConsole()]);
+      await refreshTab();
+      toast(`Linked your server${r.applied.length ? ` (using ${r.applied.join(', ')} from its start script)` : ''}. ${S.data.setup.eula ? 'Press Start at the top.' : 'Next: accept the EULA below.'}`);
+    }),
+  unlink: () => {
+    if (!confirm("Stop using this folder? Its files stay where they are; the panel goes back to its own server folder.")) return;
+    act(async () => {
+      await api('POST', '/api/setup/unlink');
+      await Promise.all([loadOverview(), loadConsole()]);
+      await refreshTab();
+    }, "Switched back to the panel's own server folder.");
   },
   stype: (el) => {
     S.form.setupType = el.dataset.id;

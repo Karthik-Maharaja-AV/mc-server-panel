@@ -92,7 +92,8 @@ function isInside(parent, child) {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-const PLAYER_NAME = /^[A-Za-z0-9_]{1,16}$/;
+// Java names, plus the "." prefix Geyser/Floodgate gives Bedrock players.
+const PLAYER_NAME = /^\.?[A-Za-z0-9_]{1,16}$/;
 const WORLD_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 module.exports = {
