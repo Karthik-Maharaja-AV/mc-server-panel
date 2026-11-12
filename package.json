@@ -1,0 +1,22 @@
+{
+  "name": "mc-server-panel",
+  "version": "1.0.0",
+  "description": "A self-hosted web panel for running a Minecraft Java server on your own PC: live console, players, permissions, server.properties, backups and worlds.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "express": "^4.22.3",
+    "pidusage": "^4.1.0",
+    "ws": "^8.22.2",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
+  }
+}

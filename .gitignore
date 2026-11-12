@@ -1,0 +1,7 @@
+node_modules/
+# Your server, worlds, backups and panel accounts stay on your PC.
+data/
+server/
+backups/
+*.log
+.DS_Store
